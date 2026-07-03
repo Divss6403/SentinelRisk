@@ -1,8 +1,42 @@
-// Transactions.jsx
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { Search } from "lucide-react";
+
+const normalize = (value) => String(value || "").trim().toLowerCase();
+
+export function getVisibleTransactions(rows, uploadedOrderIds = []) {
+  const ids = (uploadedOrderIds || [])
+    .map((id) => String(id).trim())
+    .filter(Boolean);
+
+  return ids.length ? rows.filter((row) => ids.includes(String(row.order_id))) : rows;
+}
+
+export function filterTransactions(rows, uploadedOrderIds = [], actionFilter = "", searchTerm = "") {
+  let filtered = getVisibleTransactions(rows, uploadedOrderIds);
+
+  if (actionFilter) {
+    filtered = filtered.filter((row) => row.action === actionFilter);
+  }
+
+  const query = normalize(searchTerm);
+  if (!query) return filtered;
+
+  return filtered.filter((row) => {
+    const amountValue = row.amount != null ? String(row.amount) : "";
+    const fields = [
+      row.order_id,
+      row.customer_id,
+      amountValue,
+      row.country,
+      row.device,
+      row.action,
+    ];
+
+    return fields.some((value) => normalize(value).includes(query));
+  });
+}
 
 function formatInr(value) {
   if (value == null || Number.isNaN(Number(value))) return "—";
@@ -12,7 +46,24 @@ function formatInr(value) {
 export default function Transactions() {
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState("");
+  const [search, setSearch] = useState("");
   const [active, setActive] = useState(null);
+  const [showUploadedOnly, setShowUploadedOnly] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem("showUploadedOnly") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [uploadedOrderIds, setUploadedOrderIds] = useState(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      return JSON.parse(localStorage.getItem("uploadedOrderIds") || "[]");
+    } catch {
+      return [];
+    }
+  });
 
   const load = useCallback(async () => {
     try {
@@ -23,14 +74,56 @@ export default function Transactions() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const storedIds = JSON.parse(localStorage.getItem("uploadedOrderIds") || "[]");
+      setUploadedOrderIds(storedIds);
+      setShowUploadedOnly(localStorage.getItem("showUploadedOnly") === "true");
+    } catch {
+      setUploadedOrderIds([]);
+      setShowUploadedOnly(false);
+    }
+  }, []);
+
   const open = (r) => { setActive(r); };
+  const visibleRows = filterTransactions(rows, showUploadedOnly ? uploadedOrderIds : [], filter, search);
 
   return (
     <div className="page-shell" data-testid="transactions-page">
       <h1 className="page-title">Transactions</h1>
-      <p className="page-sub">Most recent 200 scored transactions, filterable by decision.</p>
+      <p className="page-sub">Most recent 200 scored transactions, filterable by decision and searchable by any field.</p>
 
-      <div style={{ display: "flex", gap: ".75rem", marginBottom: "1rem" }}>
+      <div style={{ display: "flex", gap: ".75rem", marginBottom: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          className="input"
+          style={{ flex: 1, minWidth: 260 }}
+          placeholder="Search order, customer, amount, country, device"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          data-testid="transactions-search"
+        />
+        <button
+          className={uploadedOrderIds.length > 0 ? (showUploadedOnly ? "btn" : "btn ghost") : "btn ghost"}
+          disabled={uploadedOrderIds.length === 0}
+          onClick={() => {
+            const next = !showUploadedOnly;
+            setShowUploadedOnly(next);
+            if (typeof window !== "undefined") {
+              localStorage.setItem("showUploadedOnly", next ? "true" : "false");
+            }
+          }}
+          data-testid="filter-uploaded"
+        >
+          {uploadedOrderIds.length > 0
+            ? showUploadedOnly
+              ? `Showing ${uploadedOrderIds.length} uploaded` 
+              : `Show ${uploadedOrderIds.length} uploaded`
+            : "No uploaded transactions"}
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: ".75rem", marginBottom: "1rem", flexWrap: "wrap" }}>
         {["", "APPROVE", "REVIEW", "BLOCK"].map((a) => (
           <button
             key={a || "all"}
@@ -51,7 +144,7 @@ export default function Transactions() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {visibleRows.map((r) => (
               <tr key={r.id} data-testid={`tx-row-${r.order_id}`}>
                 <td><strong>{r.order_id}</strong></td>
                 <td>{r.customer_id}</td>
@@ -70,7 +163,7 @@ export default function Transactions() {
                 <td><button className="btn ghost sm" onClick={() => open(r)} data-testid={`tx-view-${r.order_id}`}><Search size={12} /> View</button></td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={8} style={{ textAlign: "center", color: "#94a3b8", padding: "2rem" }}>No transactions yet</td></tr>}
+            {!visibleRows.length && <tr><td colSpan={8} style={{ textAlign: "center", color: "#94a3b8", padding: "2rem" }}>No transactions yet</td></tr>}
           </tbody>
         </table>
       </div>
